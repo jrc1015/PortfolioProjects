@@ -1,0 +1,235 @@
+---
+title: "Cyclistic Case Study"
+output: html_notebook
+author: Jay Corcoran
+---
+
+This analysis is based on a fictitious company called "Cyclistic", but the data is derived from the Divvy bikes dataset. The data has been made available by Motivate International Inc. under this [license](http://www.divvybikes.com).) The purpose of this script is to consolidate downloaded data into a single dataframe and then conduct simple analysis to help answer the key question: “In what ways do members and casual riders use Divvy bikes differently?”
+
+### Prepare Data
+
+Load packages needed for data exploration.
+```{r}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(scales)
+```
+
+Import the data.
+```{r}
+Q4_2020 <- read_excel("X2020Q4_data.xlsx")
+Q1_2021 <- read_excel("X2021Q1_data.xlsx")
+Q2_2021 <- read_excel("X2021Q2_data.xlsx")
+Q3_2021 <- read_excel("X2021Q3_data.xlsx")
+```
+
+Compare column names for each file to ensure the columns match for combining. 
+```{r}
+colnames(Q4_2020)
+colnames(Q1_2021)
+colnames(Q2_2021)
+colnames(Q3_2021)
+```
+
+Check for incongruencies
+```{r}
+str(Q4_2020)
+str(Q1_2021)
+str(Q2_2021)
+str(Q3_2021)
+```
+
+Convert start and end_station_id to character type in Q42020 dataset so they stack correctly
+```{r}
+Q4_2020 <-  mutate(Q4_2020, start_station_id = as.character(start_station_id),
+                   end_station_id = as.character(end_station_id))
+```
+
+Combine data into a single dataframe
+```{r}
+all_trips <- bind_rows(Q4_2020, Q1_2021, Q2_2021, Q3_2021)
+```
+
+Drop unnecessary columns (also drop ride length to recaculate later to ensure consistency among all rows)
+```{r}
+all_trips <- all_trips %>%  
+  select(-c(start_lat, start_lng, end_lat, end_lng, ride_length)) %>%
+  na.omit(all_trips)
+```
+
+Inspect the new dataframe
+```{r}
+colnames(all_trips)
+nrow(all_trips)
+dim(all_trips)  
+head(all_trips)  
+str(all_trips)  
+summary(all_trips)
+```
+
+Verify that the member_casual column only contains 2 variables
+```{r}
+table(all_trips$member_casual)
+```
+
+Examine rideable_type column to see how many variables are present.
+```{r}
+table(all_trips$rideable_type)
+```
+
+separate out MM, DD, YYYY to better aggregate data
+```{r}
+all_trips$date <- as.Date(all_trips$started_at)
+all_trips$month <- format(as.Date(all_trips$date), "%m")
+all_trips$day <- format(as.Date(all_trips$date), "%d")
+all_trips$year <- format(as.Date(all_trips$date), "%Y")
+all_trips$day_of_week <- format(as.Date(all_trips$date), "%A")
+```
+
+Convert "ride_length" from Factor to numeric so we can run calculations on the data and then calculate trip duration
+```{r}
+all_trips$ride_length <- difftime(all_trips$ended_at,all_trips$started_at)
+
+all_trips$ride_length <- as.numeric(as.character(all_trips$ride_length))
+is.numeric(all_trips$ride_length)
+
+```
+
+Remove rows containing bikes that were taken out of commission and save it as a new dataframe. In the ride_length column they'll have a negative trip length.
+```{r}
+all_trips_v2 <- all_trips[!(all_trips$start_station_name == "HQ QR" | 
+                              all_trips$start_station_name == "WATSON TESTING - DIVVY" |
+                              all_trips$ride_length<=0),]
+```
+### Begin Analysis
+View the summary of the new dataset for ride length(mean, median, max, min)
+```{r}
+summary(all_trips_v2$ride_length)
+```
+
+Compare members and casual users
+```{r}
+aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual, FUN = mean)
+aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual, FUN = median)
+aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual, FUN = max)
+aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual, FUN = min)
+```
+
+See the average ride time by each day for members vs casual users.
+```{r}
+aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual +
+            all_trips_v2$day_of_week, FUN = mean)
+```
+
+Fix the order for days of the week, and analyze ridership data by type and weekday.
+```{r}
+all_trips_v2$day_of_week <- ordered(all_trips_v2$day_of_week, levels=c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+
+all_trips_v2 %>% 
+  mutate(weekday = wday(started_at, label = TRUE)) %>% 
+  group_by(member_casual, weekday) %>%
+  summarise(number_of_rides = n()	
+            ,average_duration = mean(ride_length)) %>% 
+  arrange(member_casual, weekday)	
+```
+
+Examine average start time for riders to see if there's any consistancy to when riders are choosing to ride.
+
+```{r}
+avg_time <- all_trips_v2 %>%
+  group_by(member_casual)%>%
+  summarise(started_at=format(mean(as.POSIXct(started_at, format="%H:%M:%S"),na.rm=T), format="%H:%M:%S"))
+
+all_trips_v2 %>%
+  mutate(weekday = wday(started_at, label = TRUE)) %>% 
+  group_by(member_casual, weekday)%>%
+  summarise(started_at=format(mean(as.POSIXct(started_at, format="%H:%M:%S"),na.rm=T), format="%H:%M:%S")) %>%
+  arrange(member_casual, weekday)
+```
+
+### Create visualizations 
+
+See how the numbers of rides compare by rider type.
+```{r}
+all_trips_v2 %>% 
+  mutate(weekday = wday(started_at, label = TRUE)) %>% 
+  group_by(member_casual, weekday) %>% 
+  summarise(number_of_rides = n()
+            ,average_duration = mean(ride_length)) %>% 
+  arrange(member_casual, weekday)  %>% 
+  ggplot(aes(x = weekday, y = number_of_rides, fill = member_casual)) +
+  scale_y_continuous(labels = comma) +
+  geom_col(position = "dodge")
+```
+
+Compare members to casual users over the course of the year.
+```{r}
+all_trips_v2 %>% 
+  mutate(month = started_at, label = TRUE) %>%
+  group_by(member_casual, month) %>% 
+  summarise(number_of_rides = n()
+            ,average_duration = mean(ride_length)) %>% 
+  arrange(member_casual, month)  %>% 
+  ggplot(aes(x = month, y = number_of_rides, fill = member_casual)) +
+  scale_y_continuous(labels = comma) +
+  geom_smooth()
+```
+
+Visualize the average duration.
+```{r}
+all_trips_v2 %>% 
+  mutate(weekday = wday(started_at, label = TRUE)) %>% 
+  group_by(member_casual, weekday) %>% 
+  summarise(number_of_rides = n()
+            ,average_duration = mean(ride_length)) %>% 
+  arrange(member_casual, weekday)  %>% 
+  ggplot(aes(x = weekday, y = average_duration, fill = member_casual)) +
+  geom_col(position = "dodge")
+```
+
+See which bike type is most popular for each rider type.
+```{r}
+bike_type <- table(all_trips_v2$rideable_type, all_trips_v2$member_casual)
+bike_type_df <- as.data.frame(bike_type)
+```
+
+### Export
+
+Export the data for visualization/further analysis in Tableau.
+```{r}
+counts <- aggregate(all_trips_v2$ride_length ~ all_trips_v2$member_casual + all_trips_v2$day_of_week, FUN = mean)
+write.csv(counts, file = '~/Desktop/Cyclistic_Case_study/avg_ride_length.csv')
+
+trip_numbers <- all_trips_v2 %>% 
+  mutate(weekday = wday(started_at, label = TRUE)) %>% 
+  group_by(member_casual, weekday) %>% 
+  summarise(number_of_rides = n()
+            ,average_duration = mean(ride_length)) %>% 
+  arrange(member_casual, weekday)
+write.csv(trip_numbers, file = '~/Desktop/Cyclistic_Case_study/ride_trips.csv')
+
+monthly_count <- all_trips_v2 %>% 
+  mutate(month = started_at, label = TRUE) %>%
+  group_by(member_casual, month) %>% 
+  summarise(number_of_rides = n()
+            ,average_duration = mean(ride_length)) %>% 
+  arrange(member_casual, month)
+write.csv(monthly_count, file = '~/Desktop/Cyclistic_Case_study/avg_ride_length_monthly.csv')
+
+bike_type <- table(all_trips_v2$rideable_type, all_trips_v2$member_casual)
+bike_type_df <- as.data.frame(bike_type)
+write.csv(bike_type_df, file = '~/Desktop/Cyclistic_Case_study/bike_type.csv')
+
+```
+
+### Key takeaways:
+* Casual riders on average ride longer then members, but members appear to ride more often.
+* Casual rider use peaks on weekends whereas there's no major changes to members use.
+* Both members and casual riders saw an uptick in use in July which may be attributed to several factors including vacations, a promotion at the time, or that July 2021 was when more venues were opening back up for in-person visits due to the pandemic
+
+### Recommendations:
+* Consider promotion at the start of summer showing casual users how much they could save if they purchase a membership.
+* Introduce membership tiers: 1-month, 3-month, 6-month, 1-year. 
+* Survey riders
+
